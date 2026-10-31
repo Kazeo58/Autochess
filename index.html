@@ -56,7 +56,7 @@ button:disabled{opacity:.4}
 @media (orientation:portrait){#rot{display:flex}}
 #inv{display:flex;gap:3px;overflow-x:auto;min-height:24px;align-items:center}.ib{flex:none;width:24px;height:24px;display:flex;align-items:center;justify-content:center;background:#2a2545;border:1px solid #4a4380;border-radius:6px;font-size:14px;cursor:pointer}.ib.cb{border-color:#ffcf4a}.ib.on{outline:2px solid #fff;background:#4a4380}
 #rec{display:none;position:fixed;inset:0;background:#000d;z-index:8;align-items:center;justify-content:center}
-</style></head><body>
+</style><script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script></head><body>
 <div id="rot">🔄 กรุณาหมุนจอเป็นแนวนอน</div>
 <div id="app">
  <div id="board"><div id="grid"></div><div id="units"></div></div>
@@ -388,8 +388,9 @@ function mpStart(go){if(MP.started)return;MP.started=true;MP.go=go;$('mpov').sty
 async function mpJoin(create){const nm=esc($('mpn').value||'ผู้เล่น'+(10+Math.random()*90|0)),code=create?Array.from({length:5},()=>MPC[Math.random()*MPC.length|0]).join(''):($('mpc').value||'').toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,8);
  if(!code)return $('mpm').textContent='ใส่รหัสห้องก่อน';$('mpm').textContent='กำลังเชื่อมต่อ...';let R=null;
  try{const c=await Promise.race([window.claude&&claude.use?claude.use('room'):null,new Promise(r=>setTimeout(()=>r(null),10000))]);R=c&&await c.join('ac-'+code)}catch(e){}
- if(!R)return $('mpm').textContent='เชื่อมต่อไม่ได้ — โหมดเพื่อนใช้ได้เฉพาะหน้าเกมที่เปิดจากลิงก์ใน Claude (ต้องล็อกอินและได้รับสิทธิ์เข้าถึง) ไม่ใช่ไฟล์ที่ดาวน์โหลด';
- MP={R,code,nm,host:!!create,started:false,P:[],nb:0,seen:{}};await R.presence({nm,host:create?1:0,al:1,hp:100});R.onPeers(mpPeers);$('mpa').style.display='none';$('mpb').style.display='flex';$('mpcode').textContent=code.toUpperCase();mpLobby()}
+ if(!R)try{R=await Promise.race([mkRoom(code,!!create),new Promise((_,j)=>setTimeout(()=>j('timeout'),12000))])}catch(e){}
+ if(!R)return $('mpm').textContent='เชื่อมต่อไม่ได้ — ตรวจรหัสห้องและอินเทอร์เน็ต (บางเครือข่ายมือถือบล็อกการเชื่อมต่อตรง ลองสลับ Wi-Fi/เน็ตมือถือ) แล้วลองใหม่';
+  MP={R,code,nm,host:!!create,started:false,P:[],nb:0,seen:{}};await R.presence({nm,host:create?1:0,al:1,hp:100});R.onPeers(mpPeers);$('mpa').style.display='none';$('mpb').style.display='flex';$('mpcode').textContent=code.toUpperCase();mpLobby()}
 function mpOrder(){const al=MP.R.peers().filter(p=>p.presence.nm&&p.presence.al!==0&&!(p.presence.hp<=0)).map(p=>p.peer).concat(mpBots().filter(b=>b.al&&b.hp>0).map(b=>b.id)).sort();let s=(MP.go+G.rd)>>>0;const rnd=()=>{s=s+0x6D2B79F5>>>0;let t=Math.imul(s^s>>>15,1|s);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296};
  for(let i=al.length-1;i>0;i--){const j=rnd()*(i+1)|0;[al[i],al[j]]=[al[j],al[i]]}return al}
 function mpOppOf(id){const al=mpOrder(),i=al.indexOf(id);if(i<0)return null;const k=i%2?i-1:i+1;return k<al.length?al[k]:al[0]}
@@ -470,5 +471,20 @@ function botItems(b){const a=bboard(b);if(!a.length)return;b.inv.slice().forEach
  if(!best)return;const[x,k]=best;if(k>=0)x.it[k]=cmb(x.it[k],c);else x.it.push(c);b.inv.splice(b.inv.indexOf(c),1)})}
 function botDrop(){(G.bots||[]).filter(b=>b.al).forEach(b=>{if(Math.random()<.9)for(let i=0;i<(G.rd<=3?1:2);i++)if(b.inv.length<10)b.inv.push(CK[Math.random()*6|0])})}
 function bplace(a){const used={};return a.map(x=>{const t=T[x.t],r=t.r,rows=r>=3?[0,1,2]:r==2?[1,0,2]:[2,1,0];let c=[3,2];for(const y of rows){const f=[0,1,2,3,4,5,6,7].filter(q=>!used[q+','+y]);if(f.length){f.sort((p,q)=>(r>=3?Math.abs(q-3.5)-Math.abs(p-3.5):Math.abs(p-3.5)-Math.abs(q-3.5))+(Math.random()-.5)*(r==2?8:2.5));c=[f[0],y];break}}used[c[0]+','+c[1]]=1;return c})}
+// ===== ห้องเล่นกับเพื่อนผ่าน WebRTC (PeerJS) ใช้ได้บน GitHub Pages — เจ้าของห้องเป็นศูนย์กลาง =====
+function mkRoom(code,create){return new Promise((res,rej)=>{if(!window.Peer)return rej('nopeer');
+ const hid='acmini-'+code,st={},cbs=[];let me,conns=[],hc=null,done=0,pr;
+ const fire=()=>cbs.forEach(f=>{try{f()}catch(e){}}),bc=()=>{const o={};for(const k in st)o[k]=st[k].presence;conns.forEach(c=>c.open&&c.send({t:'s',s:o}))};
+ const R={presence(o){const p=st[me]=st[me]||{peer:me,presence:{}};Object.assign(p.presence,o);if(create)bc();else if(hc&&hc.open)hc.send({t:'p',d:o});fire();return Promise.resolve()},
+  peers(){return Object.values(st).map(p=>({peer:p.peer,presence:p.presence,isMe:p.peer==me,sameTab:p.peer==me}))},onPeers(f){cbs.push(f)},leave(){try{pr.destroy()}catch(e){}}};
+ if(create){pr=new Peer(hid);pr.on('open',()=>{me=hid;st[me]={peer:me,presence:{}};done=1;res(R)});
+  pr.on('connection',c=>{c.on('open',()=>{conns.push(c);st[c.peer]={peer:c.peer,presence:{}};bc();fire()});
+   c.on('data',m=>{if(m&&m.t=='p'&&st[c.peer]){Object.assign(st[c.peer].presence,m.d);bc();fire()}});
+   c.on('close',()=>{delete st[c.peer];conns=conns.filter(x=>x!=c);bc();fire()})})}
+ else{pr=new Peer();pr.on('open',id=>{me=id;hc=pr.connect(hid,{reliable:true});
+  hc.on('open',()=>{st[me]={peer:me,presence:{}};done=1;res(R)});
+  hc.on('data',m=>{if(!m||m.t!='s')return;const own=st[me]&&st[me].presence;for(const k in st)delete st[k];for(const k in m.s)st[k]={peer:k,presence:m.s[k]};if(own)st[me]={peer:me,presence:Object.assign({},m.s[me],own)};fire()});
+  hc.on('close',()=>{for(const k in st)if(k!=me)delete st[k];fire()})})}
+ pr.on('error',e=>{if(!done)rej(e)})})}
 G={units:[],shop:[]};resize();
 </script></body></html>
